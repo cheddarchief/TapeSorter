@@ -11,6 +11,16 @@
 
 namespace tape {
 
+enum class SortError : u32 {
+    NoError                 = 0,
+    FailedToCreateBlankTape = 1,
+    FailedToReadFromTape    = 2,
+    FailedToWriteToTape     = 3,
+    MemoryAllocationFailed  = 4,
+    TapeMoveForwardFailed   = 5,
+    TapeRewindFailed        = 6
+};
+
 class Tape_Sorter {
     bool is_owner;
 
@@ -54,191 +64,120 @@ public:
                              true };
     }
 
-    #define FAILED_TO_CREATE_BLANK_TAPE 2
-
-    // TODO: create a error type for this method
     u32 sort()
     {
-        // Algorithm:
-        //      - [X] create 4 buffers
-        //      - [X] fill first two with sorted chunks of items
-        //      - [.] merge pairwise untill the chunk size >= max_elements
-        //      - [ ] write to out_tape
-        //      - PROFIT!!!!
-
-        s32 *buffer             = reinterpret_cast<s32*>(memory);
-        std::size_t buffer_size = memory_size / sizeof(buffer[0]);
+        s32* buffer = reinterpret_cast<s32*>(memory);
+        std::size_t buffer_size = memory_size / sizeof(s32);
 
         if (auto err = in_tape.shrink_to_filesize(); err.type)
-            return (u32) err.type;
+            return static_cast<u32>(SortError::FailedToReadFromTape);
 
         const u64 max_elements = in_tape.get_elements_count();
 
         constexpr std::size_t tmp_tapes_count = 4;
-        Tape                  tmp_tapes[tmp_tapes_count];
+        Tape tmp_tapes[tmp_tapes_count];
 
-        { // TODO: extract to method
-            std::string tmp_path = tmp_dir_path + "/tmp1x";
-            for (std::size_t i = 0; i < tmp_tapes_count; ++i) {
-                tmp_path[tmp_path.size() - 1] = '0' + i;
-                if (!Tape::init_blank(tmp_tapes[i], tmp_path.c_str(),
-                    max_elements))
-                    return FAILED_TO_CREATE_BLANK_TAPE;
+        // Initialize blank tapes
+        std::string tmp_path = tmp_dir_path + "/tmp1x";
+        for (std::size_t i = 0; i < tmp_tapes_count; ++i) {
+            tmp_path[tmp_path.size() - 1] = '0' + i;
+            if (!Tape::init_blank(tmp_tapes[i], tmp_path.c_str(), max_elements))
+                return static_cast<u32>(SortError::FailedToCreateBlankTape);
+        }
+
+        // Fill first pair of temp tapes with sorted chunks of s32
+        bool finished = false;
+        for (std::size_t buf_idx = 0; !finished; buf_idx = (buf_idx + 1) & 1) {
+            std::size_t count = 0;
+            while (count < buffer_size) {
+                s32 value;
+
+                if (auto err = in_tape.get(value); err.type)
+                    return static_cast<u32>(SortError::FailedToReadFromTape);
+
+                buffer[count] = value;
+
+                if (in_tape.move_forward(1).type) {
+                    finished = true;
+                    break;
+                }
+
+                count += 1;
+            }
+
+            std::sort(buffer, buffer + count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                if (auto err = tmp_tapes[buf_idx].set(buffer[i]); err.type)
+                    return static_cast<u32>(SortError::FailedToWriteToTape);
+
+                if (auto err = tmp_tapes[buf_idx].move_forward(1); err.type)
+                    return static_cast<u32>(SortError::TapeMoveForwardFailed);
             }
         }
 
-        { // filling first pair of temp tapes with sorted chunks of s32
-            bool finished = false;
-            for (std::size_t buf_idx = 0; !finished;
-                    buf_idx = (buf_idx + 1) & 1) {
-                std::size_t count = 0;
-                while (count < buffer_size) {
-                    s32 value;
+        // Merging sorted chunks
+        std::size_t chunk_size = buffer_size;
+        while (chunk_size < max_elements) {
+            for (std::size_t i = 0; i < tmp_tapes_count; i += 2) {
+                tmp_tapes[i].rewind();
+                tmp_tapes[i + 1].rewind();
 
-                    if (auto err = in_tape.get(value); err.type)
-                        return err.type;
+                Tape& src_tape1 = tmp_tapes[i];
+                Tape& src_tape2 = tmp_tapes[i + 1];
+                Tape& dst_tape  = tmp_tapes[(i + 2) % tmp_tapes_count];
 
-                    buffer[count] = value;
+                s32 value1, value2;
+                bool has_value1 = !src_tape1.get(value1).type;
+                bool has_value2 = !src_tape2.get(value2).type;
 
-                    if (in_tape.move_forward(1).type) {
-                        finished = true;
-                        break;
+                std::size_t elements_merged = 0;
+
+                while (has_value1 && has_value2 && elements_merged < chunk_size) {
+                    if (value1 < value2) {
+                        dst_tape.set(value1);
+                        has_value1 = !src_tape1.move_forward(1).type && !src_tape1.get(value1).type;
                     }
-
-                    count += 1;
+                    else {
+                        dst_tape.set(value2);
+                        has_value2 = !src_tape2.move_forward(1).type && !src_tape2.get(value2).type;
+                    }
+                    ++elements_merged;
                 }
 
-                std::sort(buffer, buffer + buffer_size);
-
-                for (std::size_t i = 0; i < count; ++i) {
-                    if (auto err = tmp_tapes[buf_idx].set(buffer[i]);
-                            err.type) {
-                        return err.type;
-                    }
-
-                    tmp_tapes[buf_idx].move_forward(1);
+                // Flush the remaining values from both tapes, but only up to chunk_size
+                while (has_value1 && elements_merged < chunk_size) {
+                    dst_tape.set(value1);
+                    has_value1 = !src_tape1.move_forward(1).type && !src_tape1.get(value1).type;
+                    ++elements_merged;
                 }
+                while (has_value2 && elements_merged < chunk_size) {
+                    dst_tape.set(value2);
+                    has_value2 = !src_tape2.move_forward(1).type && !src_tape2.get(value2).type;
+                    ++elements_merged;
+                }
+
+                dst_tape.rewind();
             }
+
+            chunk_size *= 2;
         }
 
-        { // Let the great merge begin
-            // algorithm:
-            //      1. we take one element from each of the tmp tapes and compare them
-            //      2. the smallest one is written onto buf_idx buffer,
-            //         untill we get to the chunk_size
-            //      3. increase chunk_size by << 1
-            //      4. swap the first pair of buffers with second
-            //      5. repeat 1-4 untill the chunks_size is >= max_elements
+        // Write the final sorted data to out_tape
+        tmp_tapes[0].rewind();
+        s32 value;
+        u64 elements_written = 0;
+        while (elements_written < max_elements && !tmp_tapes[0].get(value).type) {
+            if (auto err = out_tape.set(value); err.type)
+                return static_cast<u32>(SortError::FailedToWriteToTape);
 
-            std::size_t chunk_size = buffer_size << 1;
-
-            while (chunk_size <= max_elements) {
-                std::size_t first_pair_offset  = 0;
-                std::size_t second_pair_offset = 2;
-                bool        finished           = false;
-
-                const std::size_t chunk_size_half = chunk_size >> 1;
-
-                while (!finished) {
-                    std::size_t idx_min;
-                    std::size_t out_idx = 0;
-
-                    std::size_t counter[2] = { 0, 0 };
-
-                    for (std::size_t i = 0; i < chunk_size; ++i) {
-                        s32 first  {0};
-                        s32 second {0};
-
-                        if (counter[0] < chunk_size_half) {
-                            if (auto err = tmp_tapes[first_pair_offset + 0].get(first); err.type) {
-                                fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                return -1;
-                            }
-
-                            counter[0] += 1;
-                        } else {
-                            // we just load the rest elements of the second tape on the out
-                            for (std::size_t j = 0; j < (counter[1] - chunk_size_half); ++j) {
-                                s32 value;
-
-                                if (auto err = tmp_tapes[first_pair_offset + 1].get(value); err.type) {
-                                    fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                    return -1;
-                                }
-
-                                tmp_tapes[first_pair_offset + 1].move_forward(1);
-
-                                if (auto err = tmp_tapes[second_pair_offset + out_idx].set(value); err.type) {
-                                    fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                    return -1;
-                                }
-
-                                tmp_tapes[second_pair_offset + out_idx].move_forward(1);
-
-                                goto OUT;
-                            }
-                        }
-
-                        if (counter[1] < chunk_size_half) {
-                            if (auto err = tmp_tapes[first_pair_offset + 1].get(second); err.type) {
-                                fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                return -1;
-                            }
-
-                            counter[1] += 1;
-                        } else {
-                            // we just load the rest elements of the second tape on the out
-                            for (std::size_t j = 0; j < (counter[0] - chunk_size_half); ++j) {
-                                s32 value;
-
-                                if (auto err = tmp_tapes[first_pair_offset + 0].get(value); err.type) {
-                                    fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                    return -1;
-                                }
-
-                                tmp_tapes[first_pair_offset + 0].move_forward(1);
-
-                                if (auto err = tmp_tapes[second_pair_offset + out_idx].set(value); err.type) {
-                                    fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                    return -1;
-                                }
-
-                                tmp_tapes[second_pair_offset + out_idx].move_forward(0);
-
-                                goto OUT;
-                            }
-                        }
-
-                        idx_min = first <= second;
-                        if (idx_min) {
-                            if (auto err = tmp_tapes[second_pair_offset + out_idx].set(first); err.type) {
-                                fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                return -1;
-                            }
-                        } else {
-                            if (auto err = tmp_tapes[second_pair_offset + out_idx].set(second); err.type) {
-                                fprintf(stderr, "i/o problem: %s\n", err.msg);
-                                return -1;
-                            }
-                        }
-
-                        tmp_tapes[second_pair_offset + out_idx].move_forward(1);
-
-                        tmp_tapes[idx_min].move_forward(1);
-                        counter[idx_min] += 1;
-                    }
-OUT:
-
-                    out_idx = (out_idx + 1) & 1;
-                }
-
-                chunk_size <<= 1;
-                second_pair_offset = first_pair_offset;
-                first_pair_offset  = ((first_pair_offset + 1) & 1) << 1;
-            }
+            out_tape.move_forward(1);
+            tmp_tapes[0].move_forward(1);
+            ++elements_written;
         }
 
-        return 0;
+
+        return static_cast<u32>(SortError::NoError);
     }
 
 private:

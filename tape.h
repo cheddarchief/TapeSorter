@@ -160,6 +160,11 @@ public:
         return Result {};
     }
 
+    void rewind()
+    {
+        pointer = 0;
+    }
+
 private:
     Tape(FILE *handle,
          u64   pointer,

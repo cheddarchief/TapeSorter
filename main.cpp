@@ -23,8 +23,8 @@ s32 main()
         return -1;
     }
 
-    auto out_tape = std::move(tape::Tape::load_from(OUT_PATH,
-                                         MAX_ALLOWED_TAPE_ELEMENT_COUNT));
+    auto out_tape = std::move(tape::Tape::create_at(OUT_PATH,
+                                                    MAX_ALLOWED_TAPE_ELEMENT_COUNT));
 
     if (!out_tape) {
         fprintf(stderr, "failed to initialize out_tape");
@@ -42,10 +42,12 @@ s32 main()
         return -1;
     }
 
-    if (sorter->sort()) {
+   /* if (sorter->sort() != u32(tape::SortError::NoError)) {
         fprintf(stderr, "sort failed!");
         return -1;
-    }
+    }*/
+
+    printf("sorter() = %d\n", sorter->sort());
 
     return 0;
 }
