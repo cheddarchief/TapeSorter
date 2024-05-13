@@ -6,16 +6,21 @@
 #include "tape.h"
 #include "tape_sorter.h"
 
-const char* IN_PATH      = "w:\\tapes\\in_tape";
-const char* OUT_PATH     = "w:\\tapes\\out_tape";
-const char* TMP_DIR_PATH = "w:\\tapes\\tmp\\";
+const char* TMP_DIR_PATH = "./tmp";
 
 constexpr std::size_t MAX_ALLOWED_BYTES      = sizeof(s32) * 3;    // 3 ints
 constexpr u64 MAX_ALLOWED_TAPE_ELEMENT_COUNT = 1024 * 1024 * 1024; // 1 TB!!!
 
-s32 main()
+s32 main(s32 argc, const char** argv)
 {
-    auto in_tape = std::move(tape::Tape::load_from(IN_PATH,
+    if (argc < 3) {
+        fprintf(stderr, "error: not enough arguments supplied\n"
+                        "USAGE\n\t./%s <in tape path> <out tape_path>\n",
+                argv[0]);
+        return -1;
+    }
+
+    auto in_tape = std::move(tape::Tape::load_from(argv[1],
                                          MAX_ALLOWED_TAPE_ELEMENT_COUNT));
 
     if (!in_tape) {
@@ -23,7 +28,7 @@ s32 main()
         return -1;
     }
 
-    auto out_tape = std::move(tape::Tape::create_at(OUT_PATH,
+    auto out_tape = std::move(tape::Tape::create_at(argv[2],
                                                     MAX_ALLOWED_TAPE_ELEMENT_COUNT));
 
     if (!out_tape) {
@@ -42,7 +47,7 @@ s32 main()
         return -1;
     }
 
-   /* if (sorter->sort() != u32(tape::SortError::NoError)) {
+   /* if (sorter->sort() != u32(tape::SortError::NO_ERROR)) {
         fprintf(stderr, "sort failed!");
         return -1;
     }*/
