@@ -12,13 +12,13 @@
 namespace tape {
 
 enum class SortError : u32 {
-    NoError                 = 0,
-    FailedToCreateBlankTape = 1,
-    FailedToReadFromTape    = 2,
-    FailedToWriteToTape     = 3,
-    MemoryAllocationFailed  = 4,
-    TapeMoveForwardFailed   = 5,
-    TapeRewindFailed        = 6
+    NO_ERROR                    = 0,
+    FAILED_TO_CREATE_BLANK_TAPE = 1,
+    FAILED_TO_READ_FROM_TAPE    = 2,
+    FAILED_TO_WRITE_TO_TAPE     = 3,
+    MEMORY_ALLOCATION_FAILED    = 4,
+    TAPE_MOVE_FORWARD_FAILED    = 5,
+    TAPE_REWIND_FAILED          = 6
 };
 
 class Tape_Sorter {
@@ -70,7 +70,7 @@ public:
         std::size_t buffer_size = memory_size / sizeof(s32);
 
         if (auto err = in_tape.shrink_to_filesize(); err.type)
-            return static_cast<u32>(SortError::FailedToReadFromTape);
+            return static_cast<u32>(SortError::FAILED_TO_READ_FROM_TAPE);
 
         const u64 max_elements = in_tape.get_elements_count();
 
@@ -82,7 +82,7 @@ public:
         for (std::size_t i = 0; i < tmp_tapes_count; ++i) {
             tmp_path[tmp_path.size() - 1] = '0' + i;
             if (!Tape::init_blank(tmp_tapes[i], tmp_path.c_str(), max_elements))
-                return static_cast<u32>(SortError::FailedToCreateBlankTape);
+                return static_cast<u32>(SortError::FAILED_TO_CREATE_BLANK_TAPE);
         }
 
         // Fill first pair of temp tapes with sorted chunks of s32
@@ -93,7 +93,7 @@ public:
                 s32 value;
 
                 if (auto err = in_tape.get(value); err.type)
-                    return static_cast<u32>(SortError::FailedToReadFromTape);
+                    return static_cast<u32>(SortError::FAILED_TO_READ_FROM_TAPE);
 
                 buffer[count] = value;
 
@@ -109,10 +109,10 @@ public:
 
             for (std::size_t i = 0; i < count; ++i) {
                 if (auto err = tmp_tapes[buf_idx].set(buffer[i]); err.type)
-                    return static_cast<u32>(SortError::FailedToWriteToTape);
+                    return static_cast<u32>(SortError::FAILED_TO_WRITE_TO_TAPE);
 
                 if (auto err = tmp_tapes[buf_idx].move_forward(1); err.type)
-                    return static_cast<u32>(SortError::TapeMoveForwardFailed);
+                    return static_cast<u32>(SortError::TAPE_MOVE_FORWARD_FAILED);
             }
         }
 
@@ -169,7 +169,7 @@ public:
         u64 elements_written = 0;
         while (elements_written < max_elements && !tmp_tapes[0].get(value).type) {
             if (auto err = out_tape.set(value); err.type)
-                return static_cast<u32>(SortError::FailedToWriteToTape);
+                return static_cast<u32>(SortError::FAILED_TO_WRITE_TO_TAPE);
 
             out_tape.move_forward(1);
             tmp_tapes[0].move_forward(1);
@@ -177,7 +177,7 @@ public:
         }
 
 
-        return static_cast<u32>(SortError::NoError);
+        return static_cast<u32>(SortError::NO_ERROR);
     }
 
 private:
